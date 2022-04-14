@@ -5,7 +5,7 @@ import (
 	"os"
 	"path"
 
-	api_log_v1 "github.com/schachte/kafkaclone/api/v1"
+	"github.com/schachte/kafkaclone/api/v1/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -25,7 +25,6 @@ func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
 		baseOffset: baseOffset,
 		config:     c,
 	}
-	var err error
 	// Open or create the user-specified segment file
 	// Format is <OFFSET>.store
 	storeFile, err := os.OpenFile(
@@ -65,7 +64,7 @@ func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
 }
 
 // Append will append a record to the store file of a given segment
-func (s *segment) Append(record *api_log_v1.Record) (offset uint64, err error) {
+func (s *segment) Append(record *logger.Record) (offset uint64, err error) {
 	cur := s.nextOffset
 	record.Offset = cur
 	p, err := proto.Marshal(record)
@@ -88,7 +87,7 @@ func (s *segment) Append(record *api_log_v1.Record) (offset uint64, err error) {
 }
 
 // Read will unmarshal a record given an offset
-func (s *segment) Read(off uint64) (*api_log_v1.Record, error) {
+func (s *segment) Read(off uint64) (*logger.Record, error) {
 	// Find the location of the record by checking the index file
 	// The only reason we subtract the baseOffset is because the user can specify a base that is a non-zero unsigned integer
 	_, pos, err := s.index.Read(int64(off - s.baseOffset))
@@ -103,7 +102,7 @@ func (s *segment) Read(off uint64) (*api_log_v1.Record, error) {
 	}
 
 	// We have the record as a byte array in p, time to marshal into a struct of api.Record
-	record := &api_log_v1.Record{}
+	record := &logger.Record{}
 	err = proto.Unmarshal(p, record)
 	return record, err
 }

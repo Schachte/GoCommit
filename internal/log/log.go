@@ -1,7 +1,6 @@
 package log
 
 import (
-	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -11,7 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	api_log_v1 "github.com/schachte/kafkaclone/api/v1"
+	api_v1 "github.com/schachte/kafkaclone/api/v1"
+	"github.com/schachte/kafkaclone/api/v1/logger"
 )
 
 type Log struct {
@@ -48,6 +48,7 @@ func (l *Log) setup() error {
 
 	// Each file has a specific format. Here, we will parse the base-offset value from the filename
 	for _, file := range files {
+		// TODO: Look into this function a bit more
 		offStr := strings.TrimSuffix(
 			file.Name(),
 			path.Ext(file.Name()),
@@ -76,7 +77,7 @@ func (l *Log) setup() error {
 	return nil
 }
 
-func (l *Log) Append(record *api_log_v1.Record) (uint64, error) {
+func (l *Log) Append(record *logger.Record) (uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	off, err := l.activeSegment.Append(record)
@@ -90,7 +91,7 @@ func (l *Log) Append(record *api_log_v1.Record) (uint64, error) {
 }
 
 // Read will take in an offset and search all segments for the segment the offset would exist in
-func (l *Log) Read(off uint64) (*api_log_v1.Record, error) {
+func (l *Log) Read(off uint64) (*logger.Record, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	var s *segment
@@ -101,7 +102,7 @@ func (l *Log) Read(off uint64) (*api_log_v1.Record, error) {
 		}
 	}
 	if s == nil || s.nextOffset <= off {
-		return nil, fmt.Errorf("offset out of range: %d", off)
+		return nil, api_v1.ErrOffsetOutOfRange{Offset: off}
 	}
 	return s.Read(off)
 }

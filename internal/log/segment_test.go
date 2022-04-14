@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	api_log_v1 "github.com/schachte/kafkaclone/api/v1"
+	"github.com/schachte/kafkaclone/api/v1/logger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,7 +14,7 @@ func TestSegment(t *testing.T) {
 	dir, _ := ioutil.TempDir("", "segment-test")
 	defer os.RemoveAll(dir)
 
-	want := &api_log_v1.Record{Value: []byte("hello world")}
+	want := &logger.Record{Value: []byte("hello world")}
 
 	c := Config{}
 	c.Segment.MaxStoreBytes = 1024

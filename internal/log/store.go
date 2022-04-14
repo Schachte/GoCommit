@@ -55,13 +55,12 @@ func (s *store) Append(p []byte) (n uint64, pos uint64, err error) {
 		return 0, 0, err
 	}
 
-	s.buf.Flush()
 	// Write the actual payload to the file as well
 	w, err := s.buf.Write(p)
-	s.buf.Flush()
 	if err != nil {
 		return 0, 0, err
 	}
+
 	// If we wrote all of p, we know w represents the number of bytes written
 	// which means adding the lenWidth for the payload size will represent total bytes written
 	w += lenWidth
@@ -84,6 +83,7 @@ func (s *store) Read(pos uint64) ([]byte, error) {
 	if err := s.buf.Flush(); err != nil {
 		return nil, err
 	}
+
 	// Let's allocate a byte array to load up the payload size
 	sizeBuffer := make([]byte, lenWidth)
 	if _, err := s.File.ReadAt(sizeBuffer, int64(pos)); err != nil {
@@ -98,7 +98,6 @@ func (s *store) Read(pos uint64) ([]byte, error) {
 	if _, err := s.File.ReadAt(payload, int64(pos+lenWidth)); err != nil {
 		return nil, err
 	}
-
 	return payload, nil
 }
 

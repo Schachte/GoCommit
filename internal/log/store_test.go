@@ -27,9 +27,9 @@ func TestStoreAppendRead(t *testing.T) {
 	testRead(t, s)
 	testReadAt(t, s)
 
-	// s, err = newStore(f)
-	// require.NoError(t, err)
-	// testRead(t, s)
+	s, err = newStore(f)
+	require.NoError(t, err)
+	testRead(t, s)
 }
 
 // Writes N records to the stores file
