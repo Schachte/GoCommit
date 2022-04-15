@@ -11,6 +11,7 @@ gen_test_certs:
 		-ca=test_certs/ca.pem \
 		-ca-key=test_certs/ca-key.pem \
 		-config=internal/certs/test/configs/ca-config.json \
+		-cn="root" \
 		-profile=server \
 		internal/certs/test/configs/server-csr.json | cfssljson -bare test_certs/server
 
@@ -18,6 +19,7 @@ gen_test_certs:
 		-ca=test_certs/ca.pem \
 		-ca-key=test_certs/ca-key.pem \
 		-config=internal/certs/test/configs/ca-config.json \
+		-cn="nobody" \
 		-profile=server \
 		internal/certs/test/configs/server-csr.json | cfssljson -bare test_certs/client
 

@@ -10,19 +10,33 @@ import (
 
 	api_v1 "github.com/schachte/kafkaclone/api/v1"
 	"github.com/schachte/kafkaclone/api/v1/logger"
+	"github.com/schachte/kafkaclone/internal/authorizer"
 	"github.com/schachte/kafkaclone/internal/config"
 	"github.com/schachte/kafkaclone/internal/log"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
-type scenarios map[string]func(t *testing.T, client logger.LogServiceClient, config *Config)
+type scenarios map[string]func(*testing.T, *TestConnections, logger.LogServiceClient, *Config)
+
+type TestConnections struct {
+	RootConnection  *grpc.ClientConn
+	DummyConnection *grpc.ClientConn
+}
 
 func TestServer(t *testing.T) {
 	certFileContents, certFileName := config.ConfigFile("../../test_certs/server.pem")
 	keyFileContents, keyFileName := config.ConfigFile("../../test_certs/server-key.pem")
 	caFileContents, caFileName := config.ConfigFile("../../test_certs/ca.pem")
+
+	ACLModelFile, err := config.LoadFileFromPath("../../acl/model.conf")
+	require.NoError(t, err)
+
+	ACLPolicyFile, err := config.LoadFileFromPath("../../acl/policy.csv")
+	require.NoError(t, err)
 
 	tlsConfig := &config.TLSConfig{
 		CertFile:      certFileContents,
@@ -33,25 +47,50 @@ func TestServer(t *testing.T) {
 		CAFileName:    caFileName,
 		ServerAddress: "127.0.0.1",
 		Server:        true,
+		ACLModelFile:  ACLModelFile,
+		ACLPolicyFile: ACLPolicyFile,
 	}
+
 	testGrid := NewTestGrid()
 
 	// Different test scenarios we want to invoke
-	testGrid.addEntry("produce/consume a message to/from the log succeeds", testProduceConsume)
-	testGrid.addEntry("consume past log boundary fails", testConsumePastBoundary)
-	testGrid.addEntry("produce/consume stream succeeds", testProduceConsumeStream)
+	// testGrid.addEntry("produce/consume a message to/from the log succeeds", testProduceConsume)
+	// testGrid.addEntry("consume past log boundary fails", testConsumePastBoundary)
+	// testGrid.addEntry("produce/consume stream succeeds", testProduceConsumeStream)
+	testGrid.addEntry("unauthorized fails", testUnauthorized)
 
 	for scenario, fn := range testGrid {
 		t.Run(scenario, func(t *testing.T) {
-			client, config, teardown := setupTest(t, *tlsConfig)
+			client, conns, config, teardown := setupTest(t, *tlsConfig)
 			defer teardown()
-			fn(t, client, config)
+			connections := &TestConnections{
+				RootConnection:  conns[0],
+				DummyConnection: conns[1],
+			}
+			fn(t, connections, client, config)
 		})
+	}
+}
+
+func testUnauthorized(t *testing.T, _ *TestConnections, client logger.LogServiceClient, config *Config) {
+	ctx := context.Background()
+	produce, err := client.Produce(ctx, &logger.ProduceRequest{
+		Record: &logger.Record{
+			Value: []byte("Hello world"),
+		},
+	})
+	if produce != nil {
+		t.Fatalf("produce response should be nil")
+	}
+	gotCode, wantCode := status.Code(err), codes.PermissionDenied
+	if gotCode != wantCode {
+		t.Fatalf("Got code: %d, want: %d", gotCode, wantCode)
 	}
 }
 
 func testProduceConsumeStream(
 	t *testing.T,
+	conns *TestConnections,
 	client logger.LogServiceClient,
 	config *Config,
 ) {
@@ -99,7 +138,7 @@ func testProduceConsumeStream(
 	}
 }
 
-func testConsumePastBoundary(t *testing.T, client logger.LogServiceClient, config *Config) {
+func testConsumePastBoundary(t *testing.T, conns *TestConnections, client logger.LogServiceClient, config *Config) {
 	ctx := context.Background()
 	produce, err := client.Produce(ctx, &logger.ProduceRequest{
 		Record: &logger.Record{
@@ -122,7 +161,9 @@ func testConsumePastBoundary(t *testing.T, client logger.LogServiceClient, confi
 
 }
 
-func testProduceConsume(t *testing.T, client logger.LogServiceClient, config *Config) {
+func testProduceConsume(t *testing.T,
+	conns *TestConnections,
+	client logger.LogServiceClient, config *Config) {
 	ctx := context.Background()
 	want := &logger.Record{
 		Value: []byte("hello world"),
@@ -142,33 +183,40 @@ func testProduceConsume(t *testing.T, client logger.LogServiceClient, config *Co
 	require.Equal(t, want.Offset, consume.Record.Offset)
 }
 
-func setupTest(t *testing.T, tlsConfig config.TLSConfig) (client logger.LogServiceClient, cfg *Config, teardown func()) {
+func setupTest(t *testing.T, tlsConfig config.TLSConfig) (client logger.LogServiceClient, conns []*grpc.ClientConn, cfg *Config, teardown func()) {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	certFileContentsClient, certFileNameClient := config.ConfigFile("../../test_certs/server.pem")
-	keyFileContentsClient, keyFileNameClient := config.ConfigFile("../../test_certs/server-key.pem")
-	caFileContents, caFileName := config.ConfigFile("../../test_certs/ca.pem")
+	newClient := func(crtPath, keyPath string) (*grpc.ClientConn, logger.LogServiceClient, []grpc.DialOption) {
+		certFileContentsClient, certFileNameClient := config.ConfigFile(crtPath)
+		keyFileContentsClient, keyFileNameClient := config.ConfigFile(keyPath)
+		caFileContents, caFileName := config.ConfigFile("../../test_certs/ca.pem")
 
-	clientTlsConfig := &config.TLSConfig{
-		CertFile:     certFileContentsClient,
-		CertFileName: certFileNameClient,
-		KeyFile:      keyFileContentsClient,
-		KeyFileName:  keyFileNameClient,
-		CAFile:       caFileContents,
-		CAFileName:   caFileName,
-		Server:       false,
+		clientTlsConfig := &config.TLSConfig{
+			CertFile:     certFileContentsClient,
+			CertFileName: certFileNameClient,
+			KeyFile:      keyFileContentsClient,
+			KeyFileName:  keyFileNameClient,
+			CAFile:       caFileContents,
+			CAFileName:   caFileName,
+			Server:       false,
+		}
+
+		// Override this field for specifying that it's a client
+		clientTLSConfig, err := config.SetupTLSConfig(clientTlsConfig)
+
+		clientCreds := credentials.NewTLS(clientTLSConfig)
+		opts := []grpc.DialOption{grpc.WithTransportCredentials(clientCreds)}
+		cc, err := grpc.Dial(l.Addr().String(), opts...)
+		require.NoError(t, err)
+		client = logger.NewLogServiceClient(cc)
+		return cc, client, opts
 	}
 
-	// Override this field for specifying that it's a client
-	clientTLSConfig, err := config.SetupTLSConfig(clientTlsConfig)
-
-	clientCreds := credentials.NewTLS(clientTLSConfig)
-
-	cc, err := grpc.Dial(l.Addr().String(), grpc.WithTransportCredentials(clientCreds))
-	require.NoError(t, err)
+	rootCon, _, _ := newClient("../../test_certs/server.pem", "../../test_certs/server-key.pem")
+	nobodyCon, _, _ := newClient("../../test_certs/client.pem", "../../test_certs/client-key.pem")
 
 	dir, err := ioutil.TempDir("", "server-test")
 	require.NoError(t, err)
@@ -176,9 +224,11 @@ func setupTest(t *testing.T, tlsConfig config.TLSConfig) (client logger.LogServi
 	clog, err := log.NewLog(dir, log.Config{})
 	require.NoError(t, err)
 
+	authorizer := authorizer.New(tlsConfig.ACLModelFile.Name(), tlsConfig.ACLPolicyFile.Name())
 	serverConfig := &Config{
-		TLSConfig: tlsConfig,
-		CommitLog: clog,
+		TLSConfig:  tlsConfig,
+		CommitLog:  clog,
+		Authorizer: authorizer,
 	}
 
 	copyConfig := tlsConfig
@@ -195,10 +245,10 @@ func setupTest(t *testing.T, tlsConfig config.TLSConfig) (client logger.LogServi
 		server.Serve(l)
 	}()
 
-	client = logger.NewLogServiceClient(cc)
-	return client, cfg, func() {
+	return client, []*grpc.ClientConn{rootCon, nobodyCon}, cfg, func() {
 		server.Stop()
-		cc.Close()
+		rootCon.Close()
+		nobodyCon.Close()
 		l.Close()
 		clog.Remove()
 	}
@@ -208,7 +258,7 @@ func NewTestGrid() scenarios {
 	return make(scenarios)
 }
 
-func (s *scenarios) addEntry(key string, val func(*testing.T, logger.LogServiceClient, *Config)) {
+func (s *scenarios) addEntry(key string, val func(*testing.T, *TestConnections, logger.LogServiceClient, *Config)) {
 	(*s)[key] = val
 }
 

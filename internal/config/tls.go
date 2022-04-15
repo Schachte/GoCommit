@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"os"
 )
 
 type TLSConfig struct {
@@ -15,6 +16,8 @@ type TLSConfig struct {
 	CAFileName    string
 	ServerAddress string
 	Server        bool
+	ACLModelFile  *os.File
+	ACLPolicyFile *os.File
 }
 
 func SetupTLSConfig(cfg *TLSConfig) (*tls.Config, error) {
