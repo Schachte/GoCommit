@@ -5,6 +5,7 @@ import (
 
 	api_v1 "github.com/schachte/kafkaclone/api/v1"
 	"github.com/schachte/kafkaclone/api/v1/logger"
+	"github.com/schachte/kafkaclone/internal/config"
 	"google.golang.org/grpc"
 )
 
@@ -14,6 +15,7 @@ type CommitLog interface {
 }
 
 type Config struct {
+	TLSConfig config.TLSConfig
 	CommitLog CommitLog
 }
 
@@ -22,8 +24,8 @@ type grpcServer struct {
 	*Config
 }
 
-func NewGRPCServer(config *Config) (*grpc.Server, error) {
-	gsrv := grpc.NewServer()
+func NewGRPCServer(config *Config, opts ...grpc.ServerOption) (*grpc.Server, error) {
+	gsrv := grpc.NewServer(opts...)
 	srv, err := grpcFactory(config)
 	if err != nil {
 		return nil, err

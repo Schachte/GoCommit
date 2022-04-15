@@ -1,0 +1,16 @@
+{
+  "CN": "Ryan Schachte Custom CA",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Santa Barbara",
+      "ST": "California",
+      "O": "Ryan Schachte Youtube",
+      "OU": "Schachte CA Services"
+    }
+  ]
+}

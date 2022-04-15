@@ -1,21 +1,39 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"io/ioutil"
 	"net"
 	"testing"
 
 	api_v1 "github.com/schachte/kafkaclone/api/v1"
 	"github.com/schachte/kafkaclone/api/v1/logger"
+	"github.com/schachte/kafkaclone/internal/config"
 	"github.com/schachte/kafkaclone/internal/log"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 type scenarios map[string]func(t *testing.T, client logger.LogServiceClient, config *Config)
 
 func TestServer(t *testing.T) {
+	certFileContents, certFileName := config.ConfigFile("../../test_certs/server.pem")
+	keyFileContents, keyFileName := config.ConfigFile("../../test_certs/server-key.pem")
+	caFileContents, caFileName := config.ConfigFile("../../test_certs/ca.pem")
+
+	tlsConfig := &config.TLSConfig{
+		CertFile:      certFileContents,
+		CertFileName:  certFileName,
+		KeyFile:       keyFileContents,
+		KeyFileName:   keyFileName,
+		CAFile:        caFileContents,
+		CAFileName:    caFileName,
+		ServerAddress: "127.0.0.1",
+		Server:        true,
+	}
 	testGrid := NewTestGrid()
 
 	// Different test scenarios we want to invoke
@@ -25,7 +43,7 @@ func TestServer(t *testing.T) {
 
 	for scenario, fn := range testGrid {
 		t.Run(scenario, func(t *testing.T) {
-			client, config, teardown := setupTest(t, nil)
+			client, config, teardown := setupTest(t, *tlsConfig)
 			defer teardown()
 			fn(t, client, config)
 		})
@@ -124,14 +142,32 @@ func testProduceConsume(t *testing.T, client logger.LogServiceClient, config *Co
 	require.Equal(t, want.Offset, consume.Record.Offset)
 }
 
-func setupTest(t *testing.T, fn func(*Config)) (client logger.LogServiceClient, cfg *Config, teardown func()) {
+func setupTest(t *testing.T, tlsConfig config.TLSConfig) (client logger.LogServiceClient, cfg *Config, teardown func()) {
 	t.Helper()
 
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	clientOptions := []grpc.DialOption{grpc.WithInsecure()}
-	cc, err := grpc.Dial(l.Addr().String(), clientOptions...)
+	certFileContentsClient, certFileNameClient := config.ConfigFile("../../test_certs/server.pem")
+	keyFileContentsClient, keyFileNameClient := config.ConfigFile("../../test_certs/server-key.pem")
+	caFileContents, caFileName := config.ConfigFile("../../test_certs/ca.pem")
+
+	clientTlsConfig := &config.TLSConfig{
+		CertFile:     certFileContentsClient,
+		CertFileName: certFileNameClient,
+		KeyFile:      keyFileContentsClient,
+		KeyFileName:  keyFileNameClient,
+		CAFile:       caFileContents,
+		CAFileName:   caFileName,
+		Server:       false,
+	}
+
+	// Override this field for specifying that it's a client
+	clientTLSConfig, err := config.SetupTLSConfig(clientTlsConfig)
+
+	clientCreds := credentials.NewTLS(clientTLSConfig)
+
+	cc, err := grpc.Dial(l.Addr().String(), grpc.WithTransportCredentials(clientCreds))
 	require.NoError(t, err)
 
 	dir, err := ioutil.TempDir("", "server-test")
@@ -140,15 +176,19 @@ func setupTest(t *testing.T, fn func(*Config)) (client logger.LogServiceClient, 
 	clog, err := log.NewLog(dir, log.Config{})
 	require.NoError(t, err)
 
-	cfg = &Config{
+	serverConfig := &Config{
+		TLSConfig: tlsConfig,
 		CommitLog: clog,
 	}
 
-	if fn != nil {
-		fn(cfg)
-	}
+	copyConfig := tlsConfig
+	copyConfig.ServerAddress = l.Addr().String()
+	serverTlsConfig, err := config.SetupTLSConfig(&copyConfig)
 
-	server, err := NewGRPCServer(cfg)
+	if err != nil {
+		panic(err)
+	}
+	server, err := NewGRPCServer(serverConfig, grpc.Creds(credentials.NewTLS(serverTlsConfig)))
 	require.NoError(t, err)
 
 	go func() {
@@ -170,4 +210,12 @@ func NewTestGrid() scenarios {
 
 func (s *scenarios) addEntry(key string, val func(*testing.T, logger.LogServiceClient, *Config)) {
 	(*s)[key] = val
+}
+
+func DeepCopy(src, dist interface{}) (err error) {
+	buf := bytes.Buffer{}
+	if err = gob.NewEncoder(&buf).Encode(src); err != nil {
+		return
+	}
+	return gob.NewDecoder(&buf).Decode(dist)
 }
