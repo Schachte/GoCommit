@@ -54,9 +54,9 @@ func TestServer(t *testing.T) {
 	testGrid := NewTestGrid()
 
 	// Different test scenarios we want to invoke
-	// testGrid.addEntry("produce/consume a message to/from the log succeeds", testProduceConsume)
-	// testGrid.addEntry("consume past log boundary fails", testConsumePastBoundary)
-	// testGrid.addEntry("produce/consume stream succeeds", testProduceConsumeStream)
+	testGrid.addEntry("produce/consume a message to/from the log succeeds", testProduceConsume)
+	testGrid.addEntry("consume past log boundary fails", testConsumePastBoundary)
+	testGrid.addEntry("produce/consume stream succeeds", testProduceConsumeStream)
 	testGrid.addEntry("unauthorized fails", testUnauthorized)
 
 	for scenario, fn := range testGrid {
@@ -164,19 +164,19 @@ func testConsumePastBoundary(t *testing.T, conns *TestConnections, clients []log
 
 func testProduceConsume(t *testing.T,
 	conns *TestConnections,
-	client logger.LogServiceClient, config *Config) {
+	client []logger.LogServiceClient, config *Config) {
 	ctx := context.Background()
 	want := &logger.Record{
 		Value: []byte("hello world"),
 	}
-	produce, err := client.Produce(
+	produce, err := client[0].Produce(
 		ctx,
 		&logger.ProduceRequest{
 			Record: want,
 		},
 	)
 	require.NoError(t, err)
-	consume, err := client.Consume(ctx, &logger.ConsumeRequest{
+	consume, err := client[0].Consume(ctx, &logger.ConsumeRequest{
 		Offset: produce.Offset,
 	})
 	require.NoError(t, err)
