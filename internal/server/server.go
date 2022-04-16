@@ -55,6 +55,7 @@ func NewGRPCServer(config *Config, opts ...grpc.ServerOption) (*grpc.Server, err
 	if err != nil {
 		return nil, err
 	}
+
 	logger.RegisterLogServiceServer(gsrv, srv)
 	return gsrv, nil
 }

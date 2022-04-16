@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type scenarios map[string]func(*testing.T, *TestConnections, logger.LogServiceClient, *Config)
+type scenarios map[string]func(*testing.T, *TestConnections, []logger.LogServiceClient, *Config)
 
 type TestConnections struct {
 	RootConnection  *grpc.ClientConn
@@ -61,20 +61,21 @@ func TestServer(t *testing.T) {
 
 	for scenario, fn := range testGrid {
 		t.Run(scenario, func(t *testing.T) {
-			client, conns, config, teardown := setupTest(t, *tlsConfig)
+			clients, conns, config, teardown := setupTest(t, *tlsConfig)
 			defer teardown()
 			connections := &TestConnections{
 				RootConnection:  conns[0],
 				DummyConnection: conns[1],
 			}
-			fn(t, connections, client, config)
+			fn(t, connections, clients, config)
 		})
 	}
 }
 
-func testUnauthorized(t *testing.T, _ *TestConnections, client logger.LogServiceClient, config *Config) {
+func testUnauthorized(t *testing.T, _ *TestConnections, clients []logger.LogServiceClient, config *Config) {
 	ctx := context.Background()
-	produce, err := client.Produce(ctx, &logger.ProduceRequest{
+	unauthorizedClient := clients[1]
+	produce, err := unauthorizedClient.Produce(ctx, &logger.ProduceRequest{
 		Record: &logger.Record{
 			Value: []byte("Hello world"),
 		},
@@ -91,7 +92,7 @@ func testUnauthorized(t *testing.T, _ *TestConnections, client logger.LogService
 func testProduceConsumeStream(
 	t *testing.T,
 	conns *TestConnections,
-	client logger.LogServiceClient,
+	clients []logger.LogServiceClient,
 	config *Config,
 ) {
 	ctx := context.Background()
@@ -106,7 +107,7 @@ func testProduceConsumeStream(
 		},
 	}
 
-	stream, err := client.ProduceStream(ctx)
+	stream, err := clients[0].ProduceStream(ctx)
 	require.NoError(t, err)
 
 	for offset, record := range records {
@@ -122,7 +123,7 @@ func testProduceConsumeStream(
 		}
 	}
 
-	consumerStream, err := client.ConsumeStream(
+	consumerStream, err := clients[0].ConsumeStream(
 		ctx,
 		&logger.ConsumeRequest{Offset: 0},
 	)
@@ -138,16 +139,16 @@ func testProduceConsumeStream(
 	}
 }
 
-func testConsumePastBoundary(t *testing.T, conns *TestConnections, client logger.LogServiceClient, config *Config) {
+func testConsumePastBoundary(t *testing.T, conns *TestConnections, clients []logger.LogServiceClient, config *Config) {
 	ctx := context.Background()
-	produce, err := client.Produce(ctx, &logger.ProduceRequest{
+	produce, err := clients[0].Produce(ctx, &logger.ProduceRequest{
 		Record: &logger.Record{
 			Value: []byte("hello world"),
 		},
 	})
 	require.NoError(t, err)
 
-	consume, err := client.Consume(ctx, &logger.ConsumeRequest{
+	consume, err := clients[0].Consume(ctx, &logger.ConsumeRequest{
 		Offset: produce.Offset + 1,
 	})
 	if consume != nil {
@@ -183,7 +184,7 @@ func testProduceConsume(t *testing.T,
 	require.Equal(t, want.Offset, consume.Record.Offset)
 }
 
-func setupTest(t *testing.T, tlsConfig config.TLSConfig) (client logger.LogServiceClient, conns []*grpc.ClientConn, cfg *Config, teardown func()) {
+func setupTest(t *testing.T, tlsConfig config.TLSConfig) (clients []logger.LogServiceClient, conns []*grpc.ClientConn, cfg *Config, teardown func()) {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -211,12 +212,12 @@ func setupTest(t *testing.T, tlsConfig config.TLSConfig) (client logger.LogServi
 		opts := []grpc.DialOption{grpc.WithTransportCredentials(clientCreds)}
 		cc, err := grpc.Dial(l.Addr().String(), opts...)
 		require.NoError(t, err)
-		client = logger.NewLogServiceClient(cc)
+		client := logger.NewLogServiceClient(cc)
 		return cc, client, opts
 	}
 
-	rootCon, _, _ := newClient("../../test_certs/server.pem", "../../test_certs/server-key.pem")
-	nobodyCon, _, _ := newClient("../../test_certs/client.pem", "../../test_certs/client-key.pem")
+	rootCon, rootConClient, _ := newClient("../../test_certs/server.pem", "../../test_certs/server-key.pem")
+	nobodyCon, nobodyConClient, _ := newClient("../../test_certs/client.pem", "../../test_certs/client-key.pem")
 
 	dir, err := ioutil.TempDir("", "server-test")
 	require.NoError(t, err)
@@ -245,7 +246,7 @@ func setupTest(t *testing.T, tlsConfig config.TLSConfig) (client logger.LogServi
 		server.Serve(l)
 	}()
 
-	return client, []*grpc.ClientConn{rootCon, nobodyCon}, cfg, func() {
+	return []logger.LogServiceClient{rootConClient, nobodyConClient}, []*grpc.ClientConn{rootCon, nobodyCon}, cfg, func() {
 		server.Stop()
 		rootCon.Close()
 		nobodyCon.Close()
@@ -258,7 +259,7 @@ func NewTestGrid() scenarios {
 	return make(scenarios)
 }
 
-func (s *scenarios) addEntry(key string, val func(*testing.T, *TestConnections, logger.LogServiceClient, *Config)) {
+func (s *scenarios) addEntry(key string, val func(*testing.T, *TestConnections, []logger.LogServiceClient, *Config)) {
 	(*s)[key] = val
 }
 
